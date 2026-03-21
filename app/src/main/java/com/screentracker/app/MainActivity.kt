@@ -8,7 +8,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -40,6 +44,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -63,6 +68,11 @@ private val SecondaryTextLight = Color(0xFF49454F)
 private val SecondaryTextDark = Color(0xFFCAC4D0)
 private val OutlineVariantLight = Color(0xFFE7E0EC)
 private val OutlineVariantDark = Color(0xFF49454F)
+
+// Quality score colors
+private val QualityExcellent = Color(0xFF4CAF50)
+private val QualityFair = Color(0xFFFFA726)
+private val QualityPoor = Color(0xFFEF5350)
 
 // Theme state — readable by any child composable
 val LocalIsDark = staticCompositionLocalOf { false }
@@ -89,6 +99,8 @@ class MainActivity : ComponentActivity() {
                 RestApp(
                     onStartService = { checkPermissionsAndStart() },
                     onStopService = { stopMonitoringService() },
+                    onSleepStart = { startSleep() },
+                    onSleepEnd = { stopSleep() },
                     database = database,
                     onToggleTheme = { isDark = !isDark }
                 )
@@ -118,6 +130,23 @@ class MainActivity : ComponentActivity() {
 
     private fun stopMonitoringService() {
         stopService(Intent(this, MonitoringService::class.java))
+    }
+
+    private fun startSleep() {
+        // Auto-start monitoring service if not running
+        startMonitoringService()
+        val intent = Intent(this, MonitoringService::class.java).apply {
+            action = MonitoringService.ACTION_SLEEP_START
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+        else startService(intent)
+    }
+
+    private fun stopSleep() {
+        val intent = Intent(this, MonitoringService::class.java).apply {
+            action = MonitoringService.ACTION_SLEEP_END
+        }
+        startService(intent)
     }
 }
 
@@ -162,22 +191,41 @@ fun RestTheme(isDark: Boolean = isSystemInDarkTheme(), content: @Composable () -
 
 // ── Navigation ───────────────────────────────────────────────────────────
 
-private enum class Screen { Home, Logs }
+private enum class Screen { Home, Sleep, Logs }
 
 @Composable
 fun RestApp(
     onStartService: () -> Unit,
     onStopService: () -> Unit,
+    onSleepStart: () -> Unit,
+    onSleepEnd: () -> Unit,
     database: EventDatabase,
     onToggleTheme: () -> Unit = {}
 ) {
     var screen by remember { mutableStateOf(Screen.Home) }
     var isRunning by remember { mutableStateOf(false) }
+    var isSleeping by remember { mutableStateOf(false) }
+    var sleepStartTime by remember { mutableStateOf<Long?>(null) }
     var events by remember { mutableStateOf<List<Event>>(emptyList()) }
+    var sleepSessions by remember { mutableStateOf<List<SleepSession>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         database.eventDao().getAllEvents().collect { events = it }
+    }
+
+    LaunchedEffect(Unit) {
+        database.sleepSessionDao().getAllSessions().collect { sleepSessions = it }
+    }
+
+    // Check for active sleep session on launch
+    LaunchedEffect(Unit) {
+        val active = database.sleepSessionDao().getActiveSession()
+        if (active != null) {
+            isSleeping = true
+            isRunning = true
+            sleepStartTime = active.startTime
+        }
     }
 
     Box(
@@ -205,16 +253,40 @@ fun RestApp(
         when (screen) {
             Screen.Home -> HomeScreen(
                 isRunning = isRunning,
+                isSleeping = isSleeping,
+                sleepStartTime = sleepStartTime,
                 onToggle = {
                     if (isRunning) { onStopService(); isRunning = false }
                     else { onStartService(); isRunning = true }
                 },
+                onSleepToggle = {
+                    if (isSleeping) {
+                        onSleepEnd()
+                        isSleeping = false
+                        sleepStartTime = null
+                    } else {
+                        onSleepStart()
+                        isSleeping = true
+                        isRunning = true
+                        sleepStartTime = System.currentTimeMillis()
+                    }
+                },
                 unlocks = events.count { it.type == EventType.USER_PRESENT },
-                flashlight = events.count { it.type == EventType.FLASHLIGHT_ON }
+                flashlight = events.count { it.type == EventType.FLASHLIGHT_ON },
+                lastSleepScore = sleepSessions.firstOrNull()?.qualityScore
+            )
+            Screen.Sleep -> SleepScreen(
+                sessions = sleepSessions,
+                database = database
             )
             Screen.Logs -> LogsScreen(
                 events = events,
-                onClearData = { scope.launch { database.eventDao().deleteAllEvents() } },
+                onClearData = {
+                    scope.launch {
+                        database.eventDao().deleteAllEvents()
+                        database.sleepSessionDao().deleteAllSessions()
+                    }
+                },
                 onToggleTheme = onToggleTheme
             )
         }
@@ -232,9 +304,13 @@ fun RestApp(
 @Composable
 private fun HomeScreen(
     isRunning: Boolean,
+    isSleeping: Boolean,
+    sleepStartTime: Long?,
     onToggle: () -> Unit,
+    onSleepToggle: () -> Unit,
     unlocks: Int,
-    flashlight: Int
+    flashlight: Int,
+    lastSleepScore: Int?
 ) {
     Column(
         modifier = Modifier
@@ -261,6 +337,15 @@ private fun HomeScreen(
         // Play / Stop — 128dp circular, icon only
         PlayButton(isPlaying = isRunning, onClick = onToggle)
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Sleep / Wake controls
+        SleepControls(
+            isSleeping = isSleeping,
+            onToggle = onSleepToggle,
+            sleepStartTime = sleepStartTime
+        )
+
         Spacer(modifier = Modifier.weight(1f))
 
         // Stats — flat, quiet, no cards
@@ -272,6 +357,7 @@ private fun HomeScreen(
         ) {
             StatColumn(Icons.Default.LockOpen, unlocks, "Unlocks")
             StatColumn(Icons.Default.FlashlightOn, flashlight, "Flashlight")
+            StatColumn(Icons.Default.Bedtime, lastSleepScore ?: 0, "Sleep")
         }
     }
 }
@@ -311,6 +397,97 @@ private fun PlayButton(isPlaying: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+private fun SleepControls(
+    isSleeping: Boolean,
+    onToggle: () -> Unit,
+    sleepStartTime: Long?
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.95f else 1f,
+        animationSpec = tween(400, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
+        label = "sleepPress"
+    )
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .scale(scale)
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    if (isSleeping) Container.copy(alpha = 0.3f)
+                    else Primary.copy(alpha = 0.12f)
+                )
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = onToggle
+                )
+                .padding(horizontal = 32.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = if (isSleeping) Icons.Default.WbSunny
+                    else Icons.Default.Bedtime,
+                    contentDescription = null,
+                    tint = if (isSleeping) {
+                        if (LocalIsDark.current) Container else Primary
+                    } else Primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = if (isSleeping) "Wake" else "Sleep",
+                    fontSize = 14.sp,
+                    fontFamily = UiFont,
+                    fontWeight = FontWeight.Medium,
+                    color = if (isSleeping) {
+                        if (LocalIsDark.current) Container else Primary
+                    } else Primary,
+                    letterSpacing = 1.sp
+                )
+            }
+        }
+
+        // Elapsed timer when sleeping
+        if (isSleeping && sleepStartTime != null) {
+            ElapsedTimer(startTime = sleepStartTime)
+        }
+    }
+}
+
+@Composable
+private fun ElapsedTimer(startTime: Long) {
+    var elapsed by remember { mutableStateOf(System.currentTimeMillis() - startTime) }
+
+    LaunchedEffect(startTime) {
+        while (true) {
+            elapsed = System.currentTimeMillis() - startTime
+            delay(60_000)
+        }
+    }
+
+    val hours = elapsed / 3_600_000
+    val minutes = (elapsed % 3_600_000) / 60_000
+
+    Text(
+        text = "${hours}h ${minutes}m",
+        fontSize = 12.sp,
+        fontFamily = UiFont,
+        fontWeight = FontWeight.Normal,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        letterSpacing = 0.5.sp
+    )
+}
+
+@Composable
 private fun StatColumn(icon: ImageVector, count: Int, label: String) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -337,6 +514,491 @@ private fun StatColumn(icon: ImageVector, count: Int, label: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             letterSpacing = 1.5.sp
         )
+    }
+}
+
+// ── Sleep Screen ─────────────────────────────────────────────────────────
+
+@Composable
+private fun SleepScreen(
+    sessions: List<SleepSession>,
+    database: EventDatabase
+) {
+    var expandedSessionId by remember { mutableStateOf<Long?>(null) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Header — "Sleep" in same style as "Logs"
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 32.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom
+        ) {
+            Text(
+                text = "Sleep",
+                fontSize = 48.sp,
+                fontFamily = DisplayFont,
+                fontStyle = FontStyle.Italic,
+                fontWeight = FontWeight.Light,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 43.sp
+            )
+        }
+
+        if (sessions.isEmpty()) {
+            // Empty state
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Bedtime,
+                        null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "No sleep sessions yet",
+                        fontSize = 14.sp,
+                        fontFamily = UiFont,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Tap Sleep on the home screen to begin",
+                        fontSize = 12.sp,
+                        fontFamily = UiFont,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(bottom = 96.dp)
+            ) {
+                // Hero: most recent session
+                item(key = "hero") {
+                    sessions.firstOrNull()?.let { latest ->
+                        RecentSleepCard(session = latest, database = database)
+                    }
+                }
+
+                // History section
+                if (sessions.size > 1) {
+                    item(key = "history_label") {
+                        Text(
+                            text = "HISTORY",
+                            fontSize = 12.sp,
+                            fontFamily = UiFont,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            letterSpacing = 1.sp,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                        )
+                    }
+
+                    items(sessions.drop(1), key = { it.id }) { session ->
+                        SleepSessionRow(
+                            session = session,
+                            isExpanded = expandedSessionId == session.id,
+                            onClick = {
+                                expandedSessionId = if (expandedSessionId == session.id) null
+                                else session.id
+                            },
+                            database = database
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentSleepCard(session: SleepSession, database: EventDatabase) {
+    var analysis by remember { mutableStateOf<SleepAnalysis?>(null) }
+    val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+
+    LaunchedEffect(session.id) {
+        if (session.endTime != null) {
+            val screenEvents = database.eventDao().getEventsBetween(
+                session.startTime, session.endTime, EventType.SCREEN_ON
+            )
+            analysis = SleepAnalyzer.analyze(
+                session.startTime, session.endTime,
+                screenEvents.map { it.timestamp }
+            )
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        // Quality label + score
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = session.qualityLabel ?: "---",
+                    fontSize = 36.sp,
+                    fontFamily = DisplayFont,
+                    fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.Light,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = formatSessionSubtitle(session.startTime),
+                    fontSize = 14.sp,
+                    fontFamily = UiFont,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            QualityScoreCircle(
+                score = session.qualityScore ?: 0,
+                modifier = Modifier.size(56.dp)
+            )
+        }
+
+        // Timeline visualization
+        analysis?.let { a ->
+            SleepTimeline(
+                startTime = session.startTime,
+                endTime = session.endTime!!,
+                cycleBlocks = a.cycleBlocks,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Time range labels
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = timeFmt.format(Date(session.startTime)),
+                    fontSize = 10.sp,
+                    fontFamily = UiFont,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = timeFmt.format(Date(session.endTime)),
+                    fontSize = 10.sp,
+                    fontFamily = UiFont,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
+
+        // Stats row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            MiniStat("${session.completedCycles ?: 0}", "Cycles")
+            MiniStat("${session.interruptionCount ?: 0}", "Wakeups")
+            MiniStat(formatDuration(session.totalDurationMinutes), "Duration")
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun SleepTimeline(
+    startTime: Long,
+    endTime: Long,
+    cycleBlocks: List<CycleBlock>,
+    modifier: Modifier = Modifier
+) {
+    val totalMinutes = ((endTime - startTime) / 60_000f).coerceAtLeast(1f)
+
+    Row(
+        modifier = modifier
+            .height(48.dp)
+            .clip(RoundedCornerShape(8.dp)),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        cycleBlocks.forEach { block ->
+            val weight = block.durationMinutes.toFloat() / totalMinutes
+
+            Box(
+                modifier = Modifier
+                    .weight(weight.coerceAtLeast(0.01f))
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                        if (block.completed) Primary.copy(alpha = 0.35f)
+                        else Primary.copy(alpha = 0.12f)
+                    )
+            ) {
+                // Interruption marker — positioned proportionally within the block
+                if (block.interruptedAtMinute != null && block.durationMinutes > 0) {
+                    val fraction = block.interruptedAtMinute.toFloat() / block.durationMinutes
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Spacer(modifier = Modifier.weight(fraction.coerceAtLeast(0.01f)))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(2.dp)
+                                .background(
+                                    if (LocalIsDark.current) Container.copy(alpha = 0.6f)
+                                    else Primary.copy(alpha = 0.5f)
+                                )
+                        )
+                        Spacer(modifier = Modifier.weight((1f - fraction).coerceAtLeast(0.01f)))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualityScoreCircle(score: Int, modifier: Modifier = Modifier) {
+    val color = when {
+        score >= 85 -> QualityExcellent.copy(alpha = 0.8f)
+        score >= 65 -> Primary
+        score >= 40 -> QualityFair.copy(alpha = 0.8f)
+        else -> QualityPoor.copy(alpha = 0.8f)
+    }
+
+    Box(
+        modifier = modifier
+            .border(2.dp, color, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = if (score > 0) score.toString() else "--",
+            fontSize = 14.sp,
+            fontFamily = UiFont,
+            fontWeight = FontWeight.Medium,
+            color = color
+        )
+    }
+}
+
+@Composable
+private fun SleepSessionRow(
+    session: SleepSession,
+    isExpanded: Boolean,
+    onClick: () -> Unit,
+    database: EventDatabase
+) {
+    val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Quality dot
+            QualityDot(qualityLabel = session.qualityLabel)
+
+            // Date + time range
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = formatSessionDate(session.startTime),
+                    fontSize = 16.sp,
+                    fontFamily = UiFont,
+                    fontWeight = FontWeight.Normal,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    letterSpacing = 0.3.sp
+                )
+                if (session.endTime != null) {
+                    Text(
+                        text = "${timeFmt.format(Date(session.startTime))} – ${timeFmt.format(Date(session.endTime))}",
+                        fontSize = 12.sp,
+                        fontFamily = UiFont,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Duration
+            Text(
+                text = formatDuration(session.totalDurationMinutes),
+                fontSize = 14.sp,
+                fontFamily = UiFont,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Score
+            QualityScoreCircle(
+                score = session.qualityScore ?: 0,
+                modifier = Modifier.size(40.dp)
+            )
+        }
+
+        // Expanded detail
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = expandVertically(
+                animationSpec = tween(300, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f))
+            ),
+            exit = shrinkVertically(
+                animationSpec = tween(300, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f))
+            )
+        ) {
+            ExpandedSessionDetail(session = session, database = database)
+        }
+
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
+    }
+}
+
+@Composable
+private fun ExpandedSessionDetail(session: SleepSession, database: EventDatabase) {
+    var analysis by remember { mutableStateOf<SleepAnalysis?>(null) }
+    val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+
+    LaunchedEffect(session.id) {
+        if (session.endTime != null) {
+            val screenEvents = database.eventDao().getEventsBetween(
+                session.startTime, session.endTime, EventType.SCREEN_ON
+            )
+            analysis = SleepAnalyzer.analyze(
+                session.startTime, session.endTime,
+                screenEvents.map { it.timestamp }
+            )
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        analysis?.let { a ->
+            SleepTimeline(
+                startTime = session.startTime,
+                endTime = session.endTime!!,
+                cycleBlocks = a.cycleBlocks,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = timeFmt.format(Date(session.startTime)),
+                    fontSize = 10.sp,
+                    fontFamily = UiFont,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = timeFmt.format(Date(session.endTime)),
+                    fontSize = 10.sp,
+                    fontFamily = UiFont,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                MiniStat("${a.completedCycles}", "Cycles")
+                MiniStat("${a.interruptionCount}", "Wakeups")
+                MiniStat(formatDuration(a.totalDurationMinutes), "Duration")
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualityDot(qualityLabel: String?) {
+    val color = when (qualityLabel) {
+        "Excellent" -> QualityExcellent.copy(alpha = 0.8f)
+        "Good" -> Primary
+        "Fair" -> QualityFair.copy(alpha = 0.8f)
+        "Poor" -> QualityPoor.copy(alpha = 0.8f)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+    }
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .background(color, CircleShape)
+    )
+}
+
+@Composable
+private fun MiniStat(value: String, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            fontSize = 20.sp,
+            fontFamily = UiFont,
+            fontWeight = FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = label.uppercase(),
+            fontSize = 10.sp,
+            fontFamily = UiFont,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            letterSpacing = 1.sp
+        )
+    }
+}
+
+// ── Helper functions ─────────────────────────────────────────────────────
+
+private fun formatDuration(minutes: Int?): String {
+    if (minutes == null) return "--"
+    return "${minutes / 60}h ${minutes % 60}m"
+}
+
+private fun formatSessionDate(timestamp: Long): String {
+    val dateFmt = SimpleDateFormat("MMM d", Locale.getDefault())
+    val todayStart = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val yesterdayStart = todayStart - 86_400_000L
+
+    return when {
+        timestamp >= todayStart -> "Today"
+        timestamp >= yesterdayStart -> "Yesterday"
+        else -> dateFmt.format(Date(timestamp))
+    }
+}
+
+private fun formatSessionSubtitle(timestamp: Long): String {
+    val todayStart = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val yesterdayStart = todayStart - 86_400_000L
+
+    return when {
+        timestamp >= todayStart -> "Today"
+        timestamp >= yesterdayStart -> "Last night"
+        else -> {
+            val fmt = SimpleDateFormat("MMM d", Locale.getDefault())
+            fmt.format(Date(timestamp))
+        }
     }
 }
 
@@ -389,7 +1051,7 @@ private fun LogsScreen(events: List<Event>, onClearData: () -> Unit, onToggleThe
                 TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
             },
             title = { Text("Clear all data?") },
-            text = { Text("All recorded events will be permanently deleted.") }
+            text = { Text("All recorded events and sleep sessions will be permanently deleted.") }
         )
     }
 
@@ -544,6 +1206,8 @@ private fun EventRow(event: Event, timeFmt: SimpleDateFormat) {
                     EventType.USER_PRESENT -> Icons.Default.LockOpen
                     EventType.FLASHLIGHT_ON -> Icons.Default.FlashlightOn
                     EventType.FLASHLIGHT_OFF -> Icons.Default.FlashlightOff
+                    EventType.SLEEP_START -> Icons.Default.Bedtime
+                    EventType.SLEEP_END -> Icons.Default.WbSunny
                 },
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
@@ -565,6 +1229,8 @@ private fun EventRow(event: Event, timeFmt: SimpleDateFormat) {
                             EventType.USER_PRESENT -> "Screen Unlocked"
                             EventType.FLASHLIGHT_ON -> "Flashlight On"
                             EventType.FLASHLIGHT_OFF -> "Flashlight Off"
+                            EventType.SLEEP_START -> "Sleep Started"
+                            EventType.SLEEP_END -> "Sleep Ended"
                         },
                         fontSize = 16.sp,
                         fontFamily = UiFont,
@@ -628,6 +1294,19 @@ private fun BottomNav(current: Screen, onSelect: (Screen) -> Unit, modifier: Mod
                     filled = current == Screen.Home,
                     color = if (current == Screen.Home) activeColor else inactiveColor,
                     size = 28.dp
+                )
+            }
+
+            // Sleep — bedtime icon
+            IconButton(
+                onClick = { onSelect(Screen.Sleep) },
+                modifier = Modifier.padding(horizontal = 24.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Bedtime,
+                    contentDescription = null,
+                    tint = if (current == Screen.Sleep) activeColor else inactiveColor,
+                    modifier = Modifier.size(28.dp)
                 )
             }
 
