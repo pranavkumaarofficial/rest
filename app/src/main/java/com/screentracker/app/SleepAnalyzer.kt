@@ -29,8 +29,8 @@ data class CycleBlock(
     val startTime: Long,
     val endTime: Long,
     val durationMinutes: Int,
-    val completed: Boolean,
-    val interruptedAtMinute: Int?
+    val completed: Boolean,        // true if this uninterrupted stretch >= 90 min
+    val severity: GapSeverity      // how this stretch classifies
 )
 
 object SleepAnalyzer {
@@ -95,29 +95,25 @@ object SleepAnalyzer {
     }
 
     private fun buildCycleBlocks(start: Long, end: Long, interruptions: List<Long>): List<CycleBlock> {
-        val blocks = mutableListOf<CycleBlock>()
-        var blockStart = start
-        val cycleMs = CYCLE_DURATION_MIN * 60_000L
-
-        while (blockStart < end) {
-            val blockEnd = minOf(blockStart + cycleMs, end)
-            val blockDuration = ((blockEnd - blockStart) / 60_000).toInt()
-            val interruptionsInBlock = interruptions.filter { it in blockStart until blockEnd }
-
-            blocks.add(
-                CycleBlock(
-                    startTime = blockStart,
-                    endTime = blockEnd,
-                    durationMinutes = blockDuration,
-                    completed = interruptionsInBlock.isEmpty() && blockDuration >= CYCLE_DURATION_MIN,
-                    interruptedAtMinute = interruptionsInBlock.firstOrNull()?.let {
-                        ((it - blockStart) / 60_000).toInt()
-                    }
-                )
-            )
-            blockStart = blockEnd
+        // Gap-based: each block is an actual uninterrupted stretch of sleep.
+        // When you wake up, your sleep cycle resets — the next stretch starts fresh.
+        val points = if (interruptions.isEmpty()) {
+            listOf(start, end)
+        } else {
+            mutableListOf(start) + interruptions + end
         }
-        return blocks
+
+        return points.zipWithNext().map { (a, b) ->
+            val dur = ((b - a) / 60_000).toInt()
+            val severity = classifyGap(dur)
+            CycleBlock(
+                startTime = a,
+                endTime = b,
+                durationMinutes = dur,
+                completed = severity == GapSeverity.FULL_CYCLE,
+                severity = severity
+            )
+        }
     }
 
     private fun calculateQualityScore(

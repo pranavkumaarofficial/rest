@@ -738,28 +738,14 @@ private fun SleepTimeline(
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(6.dp))
                     .background(
-                        if (block.completed) Primary.copy(alpha = 0.35f)
-                        else Primary.copy(alpha = 0.12f)
+                        when (block.severity) {
+                            GapSeverity.FULL_CYCLE -> Primary.copy(alpha = 0.35f)
+                            GapSeverity.PARTIAL -> Primary.copy(alpha = 0.22f)
+                            GapSeverity.FRAGMENTED -> Primary.copy(alpha = 0.12f)
+                            GapSeverity.RESTLESS -> Primary.copy(alpha = 0.06f)
+                        }
                     )
-            ) {
-                // Interruption marker — positioned proportionally within the block
-                if (block.interruptedAtMinute != null && block.durationMinutes > 0) {
-                    val fraction = block.interruptedAtMinute.toFloat() / block.durationMinutes
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        Spacer(modifier = Modifier.weight(fraction.coerceAtLeast(0.01f)))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(2.dp)
-                                .background(
-                                    if (LocalIsDark.current) Container.copy(alpha = 0.6f)
-                                    else Primary.copy(alpha = 0.5f)
-                                )
-                        )
-                        Spacer(modifier = Modifier.weight((1f - fraction).coerceAtLeast(0.01f)))
-                    }
-                }
-            }
+            )
         }
     }
 }
