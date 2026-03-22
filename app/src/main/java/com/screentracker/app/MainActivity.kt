@@ -700,14 +700,46 @@ private fun RecentSleepCard(session: SleepSession, database: EventDatabase) {
             }
         }
 
-        // Stats row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            MiniStat("${session.completedCycles ?: 0}", "Cycles")
-            MiniStat("${session.interruptionCount ?: 0}", "Wakeups")
-            MiniStat(formatDuration(session.totalDurationMinutes), "Duration")
+        // Stats row — use live analysis data for accurate clustered counts
+        analysis?.let { a ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                MiniStat("${a.completedCycles}", "Cycles")
+                MiniStat("${a.interruptionCount}", "Wakeups")
+                MiniStat(formatDuration(a.totalDurationMinutes), "Duration")
+            }
+
+            // Extra insight stats
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                MiniStat(formatDuration(a.longestStretchMinutes), "Best stretch")
+                MiniStat("~${formatDuration(a.totalAwakeMinutes)}", "Awake")
+            }
+        } ?: run {
+            // Fallback to stored session data before analysis loads
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                MiniStat("${session.completedCycles ?: 0}", "Cycles")
+                MiniStat("${session.interruptionCount ?: 0}", "Wakeups")
+                MiniStat(formatDuration(session.totalDurationMinutes), "Duration")
+            }
+        }
+
+        // Breakdown — chronological list of sleep stretches and wake episodes
+        analysis?.let { a ->
+            if (a.wakeEpisodes.isNotEmpty()) {
+                SleepBreakdown(
+                    analysis = a,
+                    sleepStart = session.startTime,
+                    sleepEnd = session.endTime!!
+                )
+            }
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -765,7 +797,7 @@ private fun QualityScoreCircle(score: Int, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = if (score > 0) score.toString() else "--",
+            text = score.toString(),
             fontSize = 14.sp,
             fontFamily = UiFont,
             fontWeight = FontWeight.Medium,
@@ -908,6 +940,14 @@ private fun ExpandedSessionDetail(session: SleepSession, database: EventDatabase
                 MiniStat("${a.interruptionCount}", "Wakeups")
                 MiniStat(formatDuration(a.totalDurationMinutes), "Duration")
             }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                MiniStat(formatDuration(a.longestStretchMinutes), "Best stretch")
+                MiniStat("~${formatDuration(a.totalAwakeMinutes)}", "Awake")
+            }
         }
     }
 }
@@ -945,6 +985,165 @@ private fun MiniStat(value: String, label: String) {
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             letterSpacing = 1.sp
+        )
+    }
+}
+
+// ── Sleep Breakdown ──────────────────────────────────────────────────────
+
+@Composable
+private fun SleepBreakdown(
+    analysis: SleepAnalysis,
+    sleepStart: Long,
+    sleepEnd: Long
+) {
+    val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    ) {
+        Text(
+            text = "BREAKDOWN",
+            fontSize = 12.sp,
+            fontFamily = UiFont,
+            fontWeight = FontWeight.Medium,
+            color = secondary,
+            letterSpacing = 1.sp,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        // Sleep start marker
+        BreakdownEvent(
+            dotFilled = true,
+            label = "Fell asleep",
+            time = timeFmt.format(Date(sleepStart)),
+            dotColor = Primary
+        )
+
+        // Alternate: stretch → wake → stretch → wake ... → final wake
+        analysis.wakeEpisodes.forEachIndexed { index, wake ->
+            // Sleep stretch leading to this wake
+            val gap = analysis.gaps.getOrNull(index)
+            if (gap != null) {
+                BreakdownStretch(
+                    duration = formatDuration(gap.durationMinutes),
+                    severity = gap.severity
+                )
+            }
+
+            // Wake event
+            val wakeLabel = if (wake.rawEventCount > 1) {
+                "Woke up · ${wake.rawEventCount} screen checks"
+            } else {
+                "Brief check"
+            }
+            BreakdownEvent(
+                dotFilled = false,
+                label = wakeLabel,
+                time = timeFmt.format(Date(wake.time)),
+                dotColor = secondary
+            )
+        }
+
+        // Final stretch (from last wake to sleep end)
+        val lastGap = analysis.gaps.lastOrNull()
+        if (lastGap != null && analysis.wakeEpisodes.isNotEmpty()) {
+            BreakdownStretch(
+                duration = formatDuration(lastGap.durationMinutes),
+                severity = lastGap.severity
+            )
+        }
+
+        // Wake up marker
+        BreakdownEvent(
+            dotFilled = true,
+            label = "Woke up",
+            time = timeFmt.format(Date(sleepEnd)),
+            dotColor = Primary
+        )
+    }
+}
+
+@Composable
+private fun BreakdownEvent(
+    dotFilled: Boolean,
+    label: String,
+    time: String,
+    dotColor: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Dot
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .then(
+                    if (dotFilled) Modifier.background(dotColor, CircleShape)
+                    else Modifier.border(1.5.dp, dotColor, CircleShape)
+                )
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontFamily = UiFont,
+            fontWeight = FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = time,
+            fontSize = 12.sp,
+            fontFamily = UiFont,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun BreakdownStretch(duration: String, severity: GapSeverity) {
+    val lineColor = when (severity) {
+        GapSeverity.FULL_CYCLE -> Primary.copy(alpha = 0.35f)
+        GapSeverity.PARTIAL -> Primary.copy(alpha = 0.22f)
+        GapSeverity.FRAGMENTED -> Primary.copy(alpha = 0.12f)
+        GapSeverity.RESTLESS -> Primary.copy(alpha = 0.08f)
+    }
+    val checkMark = if (severity == GapSeverity.FULL_CYCLE) " ✓" else ""
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Vertical line segment
+        Box(
+            modifier = Modifier
+                .width(8.dp)
+                .height(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(lineColor)
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = "$duration$checkMark",
+            fontSize = 12.sp,
+            fontFamily = UiFont,
+            fontWeight = FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
     }
 }
