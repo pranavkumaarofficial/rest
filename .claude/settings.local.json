@@ -2,7 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(dir:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(.gradlew.bat assembleDebug:*)",
+      "Bash(cmd /c:*)",
+      "Bash(powershell:*)",
+      "Bash(set \"JAVA_HOME=C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\")",
+      "Bash(gradlew.bat assembleDebug:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" \"c:/Users/Pranav/Desktop/PROJECTS/lock and flash/gradlew.bat\":*)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" ./gradlew.bat:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd sleep tracking with cycle analysis and quality scoring\n\nSleep session tracking \\(Sleep/Wake buttons on Home\\), 90-min cycle\nanalysis based on SCREEN_ON interruptions, quality scoring \\(0-100\\),\ntimeline visualization, and dedicated Sleep screen with session history.\n\nNew: SleepAnalyzer.kt, SleepSession entity, DB migration v1->v2,\n3-tab bottom nav \\(Home/Sleep/Logs\\).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix sleep timeline to use gap-based cycle blocks\n\nSleep cycles now track actual uninterrupted stretches between\nwake-ups instead of fixed 90-min windows from sleep start.\nThis matches how real sleep cycles work — waking resets your\ncycle, so the next stretch starts fresh.\n\nTimeline blocks now shade by severity \\(full/partial/fragmented/restless\\)\ninstead of binary completed/interrupted.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)",
+      "Bash(findstr:*)",
+      "Bash(./gradlew clean:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

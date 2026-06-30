@@ -11,4 +11,12 @@
     <string name="flashlight_uses">Flashlight Uses</string>
     <string name="recent_events">Recent Events</string>
     <string name="no_events">No events recorded yet</string>
+    <string name="sleep_start">Sleep</string>
+    <string name="sleep_end">Wake</string>
+    <string name="sleep_tracking_active">Sleep tracking active</string>
+    <string name="no_sleep_sessions">No sleep sessions yet</string>
+    <string name="sleep_hint">Tap Sleep on the home screen to begin</string>
+    <string name="clear_all_warning">All recorded events and sleep sessions will be permanently deleted.</string>
+    <string name="sleep_started">Sleep Started</string>
+    <string name="sleep_ended">Sleep Ended</string>
 </resources>
