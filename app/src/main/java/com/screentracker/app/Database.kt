@@ -50,11 +50,20 @@ interface EventDao {
     @Query("DELETE FROM events")
     suspend fun deleteAllEvents()
 
+    @Query("SELECT * FROM events ORDER BY timestamp ASC")
+    suspend fun getAllEventsOnce(): List<Event>
+
     @Query("SELECT COUNT(*) FROM events WHERE type = :type")
     suspend fun getEventCount(type: EventType): Int
 
-    @Query("SELECT * FROM events WHERE timestamp BETWEEN :start AND :end AND type = :type ORDER BY timestamp ASC")
+    @Query("SELECT * FROM events WHERE timestamp >= :start AND timestamp <= :end AND type = :type ORDER BY timestamp ASC")
     suspend fun getEventsBetween(start: Long, end: Long, type: EventType): List<Event>
+
+    @Query("DELETE FROM events WHERE timestamp >= :start AND timestamp <= :end")
+    suspend fun deleteEventsBetween(start: Long, end: Long)
+
+    @Query("DELETE FROM events")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -74,8 +83,14 @@ interface SleepSessionDao {
     @Query("SELECT * FROM sleep_sessions ORDER BY startTime DESC LIMIT 1")
     suspend fun getLastSession(): SleepSession?
 
+    @Query("SELECT * FROM sleep_sessions ORDER BY startTime ASC")
+    suspend fun getAllSessionsOnce(): List<SleepSession>
+
     @Query("DELETE FROM sleep_sessions")
     suspend fun deleteAllSessions()
+
+    @Query("DELETE FROM sleep_sessions WHERE id = :sessionId")
+    suspend fun deleteSession(sessionId: Long)
 }
 
 @Database(entities = [Event::class, SleepSession::class], version = 2, exportSchema = false)

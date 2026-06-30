@@ -88,3 +88,14 @@ Desktop.ini
 *~
 *.bak
 *.swp
+
+# Project documentation (keeping only README.md and CLAUDE.md in root)
+notes/
+design/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Temporary/backup files
+*.backup
+nul
