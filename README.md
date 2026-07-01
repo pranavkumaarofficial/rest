@@ -74,10 +74,22 @@ Open source       → MIT license, build it yourself
 
 ### Installation
 
+#### Option 1: Download APK (Recommended)
+
+**[📥 Download REST v1.0.0 APK](https://github.com/pranavkumaarofficial/rest/releases/latest)**
+
+1. Download `rest-v1.0.0.apk` from the link above
+2. Enable "Install from unknown sources" in Android Settings → Security
+3. Open the APK file and tap Install
+4. Grant notification and camera permissions when prompted
+5. Start your first sleep session
+
+#### Option 2: Build from Source
+
 ```bash
 # Clone the repository
-git clone https://github.com/pranavkumaarofficial/lock-and-flash.git
-cd lock-and-flash
+git clone https://github.com/pranavkumaarofficial/rest.git
+cd rest
 
 # Open in Android Studio
 # File → Open → Select project folder
@@ -220,8 +232,8 @@ Built with insights from:
 
 | Type | Link |
 |------|------|
-| **Bug Reports** | [GitHub Issues](https://github.com/pranavkumaarofficial/lock-and-flash/issues) |
-| **Discussions** | [GitHub Discussions](https://github.com/pranavkumaarofficial/lock-and-flash/discussions) |
+| **Bug Reports** | [GitHub Issues](https://github.com/pranavkumaarofficial/rest/issues) |
+| **Discussions** | [GitHub Discussions](https://github.com/pranavkumaarofficial/rest/discussions) |
 
 ---
 
