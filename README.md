@@ -154,7 +154,7 @@ REST tracks nighttime phone usage, but the real solution is making the problem u
 
 #### Android Feature Request
 
-**[⭐ Star the issue on Android Issue Tracker](https://issuetracker.google.com/issues/XXXXX)**
+**[⭐ Star the issue on Android Issue Tracker](https://issuetracker.google.com/issues/530131024)**
 
 | Aspect | Details |
 |--------|---------|
