@@ -76,8 +76,8 @@ Open source       → MIT license, build it yourself
 
 ```bash
 # Clone the repository
-git clone https://github.com/pranavkumaarofficial/lock-and-flash.git
-cd lock-and-flash
+git clone https://github.com/pranavkumaarofficial/rest.git
+cd rest
 
 # Open in Android Studio
 # File → Open → Select project folder
@@ -220,8 +220,8 @@ Built with insights from:
 
 | Type | Link |
 |------|------|
-| **Bug Reports** | [GitHub Issues](https://github.com/pranavkumaarofficial/lock-and-flash/issues) |
-| **Discussions** | [GitHub Discussions](https://github.com/pranavkumaarofficial/lock-and-flash/discussions) |
+| **Bug Reports** | [GitHub Issues](https://github.com/pranavkumaarofficial/rest/issues) |
+| **Discussions** | [GitHub Discussions](https://github.com/pranavkumaarofficial/rest/discussions) |
 
 ---
 
